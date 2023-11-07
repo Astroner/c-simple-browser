@@ -1,10 +1,10 @@
 # Hi there
 
-# Timings
+# Time spent
  - Learn basic CMake + make basic ui and requests - 6h 40m
  - Basic scroll - 18m
  - Separate thread for requests - 56m
- - Address parsing(host and port) - 1h 35m
+ - Address parsing(host and port) + improved memory management in request thread - 1h 35m
 
 # Notes
  - Use OpenSSL for future https support. it is preinstalled on macOS. CMake changes:

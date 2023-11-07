@@ -13,8 +13,6 @@
 
 float msPerFrame = 1000.0f / (float)FPS;
 
-
-
 int main(void) {
     if(SDL_Init(SDL_INIT_VIDEO) < 0) return 1;
 
@@ -64,6 +62,8 @@ int main(void) {
     Text_init(&responseText, addressText_buffer, sizeof(addressText_buffer), font);
     Text_set(&responseText, "Enter hostname");
     
+    int scrollProgress = 0;
+    
     int doRequest = 0;
     SDL_Event e;
     int quit = 0;
@@ -100,7 +100,10 @@ int main(void) {
                                 break;
                             
                             case SDLK_RETURN:
-                                if(input.length > 0) doRequest = 1;
+                                if(input.length > 0) {
+                                    doRequest = 1;
+                                    scrollProgress = 0;
+                                }
                                 break;
                         }
                     }
@@ -109,6 +112,10 @@ int main(void) {
 
                 case SDL_TEXTINPUT: 
                     Text_append(&input, e.text.text, strlen(e.text.text));
+                    break;
+                
+                case SDL_MOUSEWHEEL:
+                    if(!isInputFocused) scrollProgress -= e.wheel.y;
                     break;
             }
         }
@@ -162,12 +169,27 @@ int main(void) {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
+        SDL_Texture* text = Text_getTexture(&responseText, renderer);
+        if(text) {
+            SDL_Rect responsePosition = {
+                .x = 5,
+                .y = 40 - scrollProgress,
+                .w = responseText.sdl.width,
+                .h = responseText.sdl.height
+            };
+
+            SDL_RenderCopy(renderer, text, NULL, &responsePosition);
+        }
+
+
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderFillRect(renderer, &inputBox);
 
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         SDL_RenderDrawRect(renderer, &inputBox);
 
         inputCursor.x = textRect.x;
-        SDL_Texture* text = Text_getTexture(&input, renderer);
+        text = Text_getTexture(&input, renderer);
         if(text) {
             textRect.w = input.sdl.width,
             textRect.h = input.sdl.height,
@@ -184,17 +206,6 @@ int main(void) {
             cursorFrames++;
         }
 
-        text = Text_getTexture(&responseText, renderer);
-        if(text) {
-            SDL_Rect addrPosition = {
-                .x = 5,
-                .y = 40,
-                .w = responseText.sdl.width,
-                .h = responseText.sdl.height
-            };
-
-            SDL_RenderCopy(renderer, text, NULL, &addrPosition);
-        }
 
 
         SDL_RenderPresent(renderer);

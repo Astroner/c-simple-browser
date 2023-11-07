@@ -22,6 +22,6 @@ find_package(SDL2 REQUIRED)
 target_include_directories(executable PRIVATE ${SDL2_INCLUDE_DIRS})
 target_link_libraries(executable ${SDL2_LIBRARIES})
 
-find_package(SDL2_ttf 2.20.1 REQUIRED)
+find_package(SDL2_ttf REQUIRED)
 target_include_directories(executable PRIVATE /Library/Frameworks/SDL2_ttf.framework/Headers)
 target_link_libraries(executable SDL2_ttf::SDL2_ttf)

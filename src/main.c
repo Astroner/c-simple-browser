@@ -13,6 +13,108 @@
 
 float msPerFrame = 1000.0f / (float)FPS;
 
+typedef enum RequestStatus {
+    RequestStatusIdle,
+    RequestStatusLoading,
+    RequestStatusFailed,
+    RequestStatusSuccess
+} RequestStatus;
+
+typedef struct Request {
+    RequestStatus status;
+    union {
+        struct {
+            char* text;
+            size_t length;
+        } success;
+
+        struct {
+            char* reason;
+        } failure;
+    } data;
+} Request;
+
+typedef struct RequestThreadData {
+    size_t currentRequest;
+
+    char* address;
+
+    Request* result;
+} RequestThreadData;
+
+int requestThreadHandler(void* threadData) {
+    RequestThreadData* data = threadData;
+    size_t requestId = data->currentRequest;
+    char* address = data->address;
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    struct addrinfo* res;
+    if(getaddrinfo(data->address, "http", &hints, &res) != 0) {
+        if(requestId == data->currentRequest) {
+            data->result->status = RequestStatusFailed;
+            data->result->data.failure.reason = "This site can't be reached";
+        }
+
+        goto cleanup;
+    }
+
+    
+    struct sockaddr_in* serverAddress = (struct sockaddr_in*)res->ai_addr;
+    
+    int request = socket(AF_INET, SOCK_STREAM, 0);
+    
+    struct sockaddr_in requestAddress;
+    memset(&requestAddress, 0, sizeof(requestAddress));
+
+
+    requestAddress.sin_family = AF_INET;
+    requestAddress.sin_port = serverAddress->sin_port;
+    memcpy(&requestAddress.sin_addr.s_addr, &serverAddress->sin_addr.s_addr, sizeof(serverAddress->sin_addr.s_addr));
+
+    if(connect(request, (struct sockaddr*)&requestAddress, sizeof(requestAddress)) < 0) {
+        if(requestId == data->currentRequest) {
+            data->result->status = RequestStatusFailed;
+            data->result->data.failure.reason = "Cannot connect to the site";
+        }
+
+        goto cleanup;
+    }
+
+    char message[] = 
+        "GET / HTTP/1.1\r\n"
+        "Accept: text/html\r\n"
+        "Accept-Charset: ASCII\r\n"
+        "\r\n";
+
+    send(request, message, sizeof(message), 0);
+
+    size_t responseMaxSize = 1000;
+    char* response = malloc(responseMaxSize);
+
+    size_t length = read(request, response, responseMaxSize - 1);
+
+    close(request);
+
+    if(requestId != data->currentRequest) {
+        free(response);
+        goto cleanup;
+    }
+    
+    data->result->status = RequestStatusSuccess;
+    data->result->data.success.text = response;
+    data->result->data.success.length = length;
+
+cleanup:
+    free(address);
+
+    return 0;
+}
+
 int main(void) {
     if(SDL_Init(SDL_INIT_VIDEO) < 0) return 1;
 
@@ -57,14 +159,28 @@ int main(void) {
     int isInputFocused = 1;
     int cursorFrames = 0;
     
-    char addressText_buffer[1000];
-    Text responseText;
-    Text_init(&responseText, addressText_buffer, sizeof(addressText_buffer), font);
-    Text_set(&responseText, "Enter hostname");
+    Text responseText = {
+        .font = font,
+        .buffer = "Enter address",
+        .sdl.requireRerender = 1
+    };
     
+
+    // REQUEST DATA
+    size_t requestCounter = 0;
+    Request request = {
+        .status = RequestStatusIdle,
+    };
+    RequestThreadData requestThreadData = {
+        .currentRequest = requestCounter,
+        .result = &request
+    };
+
+    RequestStatus prevStatus = RequestStatusIdle;
+
+
     int scrollProgress = 0;
     
-    int doRequest = 0;
     SDL_Event e;
     int quit = 0;
     while(!quit) {
@@ -101,7 +217,21 @@ int main(void) {
                             
                             case SDLK_RETURN:
                                 if(input.length > 0) {
-                                    doRequest = 1;
+                                    isInputFocused = 0;
+
+                                    char* addressCopy = malloc(input.length + 1);
+                                    memcpy(addressCopy, inputBuffer, input.length);
+                                    addressCopy[input.length] = (char)'\0';
+    
+                                    if(request.status == RequestStatusSuccess) {
+                                        free(request.data.success.text);
+                                    }
+
+                                    request.status = RequestStatusLoading;
+
+                                    requestThreadData.currentRequest = ++requestCounter;
+                                    requestThreadData.address = addressCopy;
+                                    SDL_DetachThread(SDL_CreateThread(requestThreadHandler, "request", &requestThreadData));
                                     scrollProgress = 0;
                                 }
                                 break;
@@ -115,56 +245,32 @@ int main(void) {
                     break;
                 
                 case SDL_MOUSEWHEEL:
-                    if(!isInputFocused) scrollProgress -= e.wheel.y;
+                    if(!isInputFocused && (scrollProgress - e.wheel.y) >= 0) scrollProgress -= e.wheel.y;
                     break;
             }
         }
 
-        if(doRequest) {
-            doRequest = 0;
+        if(prevStatus != request.status) {
+            prevStatus = request.status;
             
-            struct addrinfo hints;
-            memset(&hints, 0, sizeof(hints));
-            hints.ai_family = AF_INET;
-            hints.ai_socktype = SOCK_STREAM;
-            hints.ai_protocol = IPPROTO_TCP;
-
-            struct addrinfo* res;
-            if(getaddrinfo(input.buffer, "http", &hints, &res)) {
-                Text_set(&responseText, "404");
-            } else {
-                struct sockaddr_in* serverAddress = (struct sockaddr_in*)res->ai_addr;
+            switch(request.status) {
+                case RequestStatusLoading:
+                    responseText.buffer = "Loading...";
+                    responseText.sdl.requireRerender = 1;
+                    break;
                 
-                int request = socket(AF_INET, SOCK_STREAM, 0);
-                
-                struct sockaddr_in requestAddress;
-                memset(&requestAddress, 0, sizeof(requestAddress));
+                case RequestStatusFailed:
+                    responseText.buffer = request.data.failure.reason;
+                    responseText.sdl.requireRerender = 1;
+                    break;
 
-
-                requestAddress.sin_family = AF_INET;
-                requestAddress.sin_port = serverAddress->sin_port;
-                memcpy(&requestAddress.sin_addr.s_addr, &serverAddress->sin_addr.s_addr, sizeof(serverAddress->sin_addr.s_addr));
-
-                if(connect(request, (struct sockaddr*)&requestAddress, sizeof(requestAddress)) < 0) {
-                    printf("Failed to connect\n");
-                }
-
-                char message[] = 
-                    "GET / HTTP/1.1\r\n"
-                    "Accept: text/html\r\n"
-                    "Accept-Charset: ASCII\r\n"
-                    "\r\n";
-
-                send(request, message, sizeof(message), 0);
-
-                Text_set(&responseText, "");
-
-                responseText.length = read(request, responseText.buffer, responseText.maxLength);
-                responseText.sdl.requireRerender = 1;
-
-                close(request);
+                case RequestStatusSuccess:
+                    responseText.buffer = request.data.success.text;
+                    responseText.sdl.requireRerender = 1;
+                    break;
             }
         }
+
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
@@ -200,7 +306,7 @@ int main(void) {
         }
 
         if(isInputFocused) {
-            if(cursorFrames % 50 > 25) {
+            if(cursorFrames % 50 < 25) {
                 SDL_RenderDrawRect(renderer, &inputCursor);
             }
             cursorFrames++;

@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.27.7)
 set(CMAKE_C_COMPILER gcc-12)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_FLAGS "-Wall -Wextra -pedantic")
+set(CMAKE_FIND_FRAMEWORK ONLY)
 
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
 

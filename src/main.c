@@ -1,11 +1,13 @@
 #include <SDL2/SDL.h>
 #include <SDL2_ttf/SDL_ttf.h>
+#include <stdlib.h>
 #include <string.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 
 #include "text.h"
+#include "parse-address.h"
 
 #define FPS 60
 #define DEFAULT_WIDTH 1280
@@ -45,7 +47,28 @@ typedef struct RequestThreadData {
 int requestThreadHandler(void* threadData) {
     RequestThreadData* data = threadData;
     size_t requestId = data->currentRequest;
-    char* address = data->address;
+
+    struct {
+        char* address;
+        char* host;
+    } tempos = {
+        .address = NULL,
+        .host = NULL
+    };
+    void** tempoItems = (void**)&tempos;
+
+
+    tempos.address = data->address;
+
+    ParsedAddress parsed;
+    if(parseAddress(tempos.address, &parsed) < 0) {
+        if(requestId == data->currentRequest) {
+            data->result->status = RequestStatusFailed;
+            data->result->data.failure.reason = "Failed to parse address";
+        }
+
+        goto cleanup;
+    }
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -53,8 +76,12 @@ int requestThreadHandler(void* threadData) {
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
+    tempos.host = malloc(parsed.host.length + 1);
+    memcpy(tempos.host, tempos.address + parsed.host.start, parsed.host.length);
+    tempos.host[parsed.host.length] = '\0';
+
     struct addrinfo* res;
-    if(getaddrinfo(data->address, "http", &hints, &res) != 0) {
+    if(getaddrinfo(tempos.host, "http", &hints, &res) != 0) {
         if(requestId == data->currentRequest) {
             data->result->status = RequestStatusFailed;
             data->result->data.failure.reason = "This site can't be reached";
@@ -73,7 +100,11 @@ int requestThreadHandler(void* threadData) {
 
 
     requestAddress.sin_family = AF_INET;
-    requestAddress.sin_port = serverAddress->sin_port;
+    if(parsed.port < 0) {
+        requestAddress.sin_port = serverAddress->sin_port;
+    } else {
+        requestAddress.sin_port = htons(parsed.port);
+    }
     memcpy(&requestAddress.sin_addr.s_addr, &serverAddress->sin_addr.s_addr, sizeof(serverAddress->sin_addr.s_addr));
 
     if(connect(request, (struct sockaddr*)&requestAddress, sizeof(requestAddress)) < 0) {
@@ -110,10 +141,23 @@ int requestThreadHandler(void* threadData) {
     data->result->data.success.length = length;
 
 cleanup:
-    free(address);
+    for(size_t i = 0; i < sizeof(tempos) / sizeof(void*); i++) {
+        if(tempoItems[i] != NULL) {
+            free(tempoItems[i]);
+        }
+    }
 
     return 0;
 }
+
+// int main(void) {
+//     ParsedAddress parsed;
+//     printf("status: %d\n", parseAddress("google.com:80", &parsed));
+
+//     printf("%d %d %d\n", parsed.host.start, parsed.host.length, parsed.port);
+
+//     return 0;
+// }
 
 int main(void) {
     if(SDL_Init(SDL_INIT_VIDEO) < 0) return 1;
@@ -267,6 +311,9 @@ int main(void) {
                 case RequestStatusSuccess:
                     responseText.buffer = request.data.success.text;
                     responseText.sdl.requireRerender = 1;
+                    break;
+
+                default:
                     break;
             }
         }
